@@ -3,13 +3,46 @@
 
 SEG_VIDEO   equ 0B800h              ; segmento de la memoria de video en modo texto
 COLOR_DEF   equ 07h                 ; color por defecto: gris sobre negro
+COLOR_FONDO     equ 07h    ; negro, letras grises
+COLOR_MARCO     equ 0Bh    ; negro, letras celestes
+COLOR_OPCION    equ 07h    ; opción normal
+COLOR_SELECCION equ 70h    ; fondo gris, letras negras
+
+FLECHA_ARRIBA   equ 48h             ; scancodes para navegar y usar los atajos
+FLECHA_ABAJO    equ 50h
+FLECHA_IZQUIERDA equ 4Bh
+FLECHA_DERECHA  equ 4Dh
+TECLA_ENTER     equ 1Ch
+TECLA_ESCAPE    equ 01h
+TECLA_BACKSPACE equ 0Eh
+ALT_X           equ 2Dh
+ALT_Z           equ 2Ch
+ALT_C           equ 2Eh
+ALT_U           equ 16h
+ALT_D           equ 20h
+ALT_S           equ 1Fh
+ALT_M           equ 32h
+ALT_N           equ 31h
+ALT_I           equ 17h
+ALT_J           equ 24h
+ALT_B           equ 30h
+ALT_H           equ 23h
 
 .data
 
 buf_texto   db 2000 dup(' ')        ; un caracter del documento por cada celda
 buf_color   db 2000 dup(COLOR_DEF)  ; un atributo de color por cada celda
 
-msg_hola    db 'Hola$'
+opcion_menu     db 0                    ; guarda la opcion actual del menu
+linea_superior  db '+------------------------------------------+$'
+linea_titulo    db '|          EDITOR DE TEXTO x8086          |$'
+texto_opcion1   db '  1. Crear archivo nuevo  $'
+texto_opcion2   db '  2. Abrir archivo existente$'
+texto_opcion3   db '  3. Salir                $'
+texto_ayuda     db 'Use flechas y Enter. Alt+X para salir.$'
+texto_edicion   db 'Pantalla de edicion pendiente.$'
+texto_regresar  db 'Presione una tecla para regresar al menu.$'
+
 
 .code
 
