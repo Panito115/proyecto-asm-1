@@ -51,24 +51,188 @@ inicio:
     mov ax, @data
     mov ds, ax
 
-    ; limpia la pantalla con el color por defecto
-    mov bl, COLOR_DEF
-    call limpiar_pantalla
-
-    ; escribe la palabra Hola en la fila 0 y la columna 0
-    mov dh, 0
-    mov dl, 0
-    mov bl, COLOR_DEF
-    lea si, msg_hola
-    call escribir_texto
-
-    ; espera a que el usuario presione una tecla
-    mov ah, 00h
-    int 16h
+    ; muestra el menu hasta que el usuario seleccione salir
+    call menu_principal
 
     ; salida limpia a DOS
     mov ax, 4C00h
     int 21h
+
+; lee una tecla y devuelve ASCII en AL y su scancode en AH
+leer_tecla proc
+    mov ah, 00h
+    int 16h
+    ret
+leer_tecla endp
+
+; pinta el marco, titulo y las opciones del menu principal
+dibujar_menu proc
+    push bx
+    push dx
+    push si
+
+    ; limpia la pantalla antes de escribir los elementos del menu
+    mov bl, COLOR_FONDO
+    call limpiar_pantalla
+
+    ; dibuja el marco sencillo y el titulo del programa
+    mov dh, 4
+    mov dl, 18
+    mov bl, COLOR_MARCO
+    lea si, linea_superior
+    call escribir_texto
+
+    mov dh, 5
+    mov dl, 18
+    lea si, linea_titulo
+    call escribir_texto
+
+    mov dh, 6
+    mov dl, 18
+    lea si, linea_superior
+    call escribir_texto
+
+    ; dibuja las opciones y deja visible la forma de navegar
+    call dibujar_opciones
+    mov dh, 15
+    mov dl, 20
+    mov bl, COLOR_MARCO
+    lea si, texto_ayuda
+    call escribir_texto
+
+    pop si
+    pop dx
+    pop bx
+    ret
+dibujar_menu endp
+
+; escribe las tres opciones y resalta la que esta guardada en opcion_menu
+dibujar_opciones proc
+    push bx
+    push dx
+    push si
+
+    ; selecciona el color de la primera opcion
+    mov bl, COLOR_OPCION
+    cmp opcion_menu, 0
+    jne revisar_opcion2
+    mov bl, COLOR_SELECCION
+
+revisar_opcion2:
+    mov dh, 8
+    mov dl, 26
+    lea si, texto_opcion1
+    call escribir_texto
+
+    ; selecciona el color de la segunda opcion
+    mov bl, COLOR_OPCION
+    cmp opcion_menu, 1
+    jne revisar_opcion3
+    mov bl, COLOR_SELECCION
+
+revisar_opcion3:
+    mov dh, 10
+    mov dl, 26
+    lea si, texto_opcion2
+    call escribir_texto
+
+    ; selecciona el color de la tercera opcion
+    mov bl, COLOR_OPCION
+    cmp opcion_menu, 2
+    jne fin_opciones
+    mov bl, COLOR_SELECCION
+
+fin_opciones:
+    mov dh, 12
+    mov dl, 26
+    lea si, texto_opcion3
+    call escribir_texto
+
+    pop si
+    pop dx
+    pop bx
+    ret
+dibujar_opciones endp
+
+; espera flechas o Enter y ejecuta la opcion elegida del menu
+menu_principal proc
+    mov opcion_menu, 0
+    call dibujar_menu
+
+esperar_menu:
+    call leer_tecla
+
+    ; las teclas con Alt y las flechas llegan con AL igual a cero
+    cmp al, 0
+    jne revisar_enter
+
+    cmp ah, ALT_X
+    je salir_menu
+
+    cmp ah, FLECHA_ARRIBA
+    je mover_arriba
+
+    cmp ah, FLECHA_ABAJO
+    je mover_abajo
+
+    jmp esperar_menu
+
+revisar_enter:
+    cmp al, 0Dh
+    jne esperar_menu
+
+    ; las primeras dos opciones solo muestran la pantalla temporal de edicion
+    cmp opcion_menu, 2
+    je salir_menu
+
+    call pantalla_edicion
+    call dibujar_menu
+    jmp esperar_menu
+
+mover_arriba:
+    cmp opcion_menu, 0
+    je esperar_menu
+    dec opcion_menu
+    call dibujar_opciones
+    jmp esperar_menu
+
+mover_abajo:
+    cmp opcion_menu, 2
+    je esperar_menu
+    inc opcion_menu
+    call dibujar_opciones
+    jmp esperar_menu
+
+salir_menu:
+    ret
+menu_principal endp
+
+; limpia la pantalla y espera una tecla antes de regresar al menu
+pantalla_edicion proc
+    push bx
+    push dx
+    push si
+
+    ; muestra una pantalla temporal hasta implementar la edicion real
+    mov bl, COLOR_FONDO
+    call limpiar_pantalla
+    mov dh, 10
+    mov dl, 25
+    mov bl, COLOR_MARCO
+    lea si, texto_edicion
+    call escribir_texto
+
+    mov dh, 12
+    mov dl, 18
+    lea si, texto_regresar
+    call escribir_texto
+    call leer_tecla
+
+    pop si
+    pop dx
+    pop bx
+    ret
+pantalla_edicion endp
 
 ; llena las 2000 celdas de la pantalla con espacios y el color que viene en BL
 limpiar_pantalla proc
