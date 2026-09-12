@@ -36,6 +36,7 @@ COL_MIN         equ 0
 COL_MAX         equ 79
 COLOR_ESTADO    equ 70h             ; barra de estado: fondo gris, letras negras
 ASCII_BACK      equ 08h             ; codigo ASCII de la tecla Backspace
+MAX_NOMBRE      equ 8               ; cantidad maxima de letras para un archivo
 
 .data
 
@@ -51,17 +52,18 @@ texto_opcion3   db '  3. Salir                $'
 texto_ayuda     db 'Use flechas y Enter. Alt+X para salir.$'
 fila_cur        db FILA_MIN             ; fila donde esta el cursor de edicion
 col_cur         db COL_MIN              ; columna donde esta el cursor de edicion
-texto_archivo   db 'Archivo: SIN NOMBRE$'
+texto_archivo   db 'Archivo: $'
+texto_sin_nombre db 'SIN NOMBRE$'
 texto_fila      db 'Fila:$'
 texto_columna   db 'Col:$'
 texto_atajo     db 'Alt+H = ayuda$'
 texto_color     db 'Color:$'
 
-colores_letra   db 0Fh, 0Ah, 0Eh       ; blanco, verde y amarillo
-colores_fondo   db 00h, 10h, 40h       ; negro, azul y rojo
-indice_letra    db 0                   ; color de letra seleccionado
-indice_fondo    db 0                   ; color de fondo seleccionado
-color_activo    db 0Fh                 ; atributo para los caracteres nuevos
+colores_letra   db 0Fh, 0Ah, 0Eh ; blanco, verde y amarillo
+colores_fondo   db 00h, 10h, 40h  ; negro, azul y rojo
+indice_letra    db 0 ; color de letra seleccionado
+indice_fondo    db 0  ; color de fondo seleccionado
+color_activo    db 0Fh ; atributo para los caracteres nuevos
 
 linea_ayuda     db '+------------------------------------------------------------------------------+$'
 titulo_ayuda    db '|                             AYUDA DEL EDITOR                              |$'
@@ -75,6 +77,17 @@ ayuda_fondo     db 'Alt+N: cambia el color de fondo nuevo.$'
 ayuda_ayuda     db 'Alt+H: muestra esta pantalla de ayuda.$'
 ayuda_volver    db 'Alt+Z: regresa al menu.$'
 ayuda_salir     db 'Presione cualquier tecla para volver.$'
+
+nombre_archivo  db 8 dup(0) ; nombre sin extension para mostrar
+nombre_dos      db 13 dup(0) ; nombre con .TXE y cero final
+largo_nombre    db 0  ; caracteres escritos para el nombre
+
+linea_crear     db '+----------------------------------------------+$'
+titulo_crear    db '|                CREAR ARCHIVO                |$'
+texto_nombre    db 'Nombre (maximo 8): $'
+texto_extension db 'Extension: .TXE$'
+texto_crear_ayuda db 'Enter confirma. Alt+Z regresa.$'
+texto_error     db 'No se pudo crear el archivo.$'
 
 
 .code
@@ -214,11 +227,19 @@ revisar_enter:
     cmp al, 0Dh
     jne esperar_menu
 
-    ; las primeras dos opciones solo muestran la pantalla temporal de edicion
+    ; crear pide nombre; abrir queda temporal hasta el siguiente paso
     cmp opcion_menu, 2
     je salir_menu
 
+    cmp opcion_menu, 0
+    je crear_nuevo
+
     call pantalla_edicion
+    call dibujar_menu
+    jmp esperar_menu
+
+crear_nuevo:
+    call crear_archivo
     call dibujar_menu
     jmp esperar_menu
 
@@ -389,6 +410,19 @@ dibujar_edicion proc
     mov bl, COLOR_MARCO
     lea si, texto_archivo
     call escribir_texto
+    mov dl, 10
+    cmp largo_nombre, 0
+    jne mostrar_nombre_archivo
+    lea si, texto_sin_nombre
+    call escribir_texto
+    jmp archivo_listo
+
+mostrar_nombre_archivo:
+    call escribir_nombre
+    lea si, texto_extension
+    call escribir_texto
+
+archivo_listo:
     call dibujar_estado
 
     pop si
@@ -532,8 +566,8 @@ escribir_en_buffer proc
 
     ; guarda el caracter con su color y lo dibuja en la pantalla
     mov buf_texto[bx], al
-    mov al, color_activo
-    mov buf_color[bx], al
+    mov bl, color_activo
+    mov buf_color[bx], bl
     mov dh, fila_cur
     mov dl, col_cur
     mov bl, color_activo
@@ -862,5 +896,286 @@ pantalla_ayuda proc
     pop bx
     ret
 pantalla_ayuda endp
+
+; pide un nombre, crea el archivo y entra al editor vacio
+crear_archivo proc
+pedir_nombre:
+    mov largo_nombre, 0
+    call dibujar_crear
+    call leer_nombre
+    cmp al, 0
+    je crear_fin
+
+    call armar_nombre_dos
+    call crear_en_disco
+    jc error_crear
+    call vaciar_buffer
+    call pantalla_edicion
+
+crear_fin:
+    ret
+
+error_crear:
+    call mostrar_error
+    jmp pedir_nombre
+crear_archivo endp
+
+; dibuja la pantalla donde se pide el nombre del archivo
+dibujar_crear proc
+    push bx
+    push dx
+    push si
+
+    mov bl, COLOR_FONDO
+    call limpiar_pantalla
+    mov dh, 5
+    mov dl, 16
+    mov bl, COLOR_MARCO
+    lea si, linea_crear
+    call escribir_texto
+    mov dh, 6
+    lea si, titulo_crear
+    call escribir_texto
+    mov dh, 7
+    lea si, linea_crear
+    call escribir_texto
+
+    mov dh, 10
+    mov dl, 20
+    mov bl, COLOR_DEF
+    lea si, texto_nombre
+    call escribir_texto
+    mov dh, 12
+    lea si, texto_extension
+    call escribir_texto
+    mov dh, 15
+    mov dl, 20
+    mov bl, COLOR_MARCO
+    lea si, texto_crear_ayuda
+    call escribir_texto
+
+    pop si
+    pop dx
+    pop bx
+    ret
+dibujar_crear endp
+
+; lee hasta ocho letras o numeros para el nombre del archivo
+leer_nombre proc
+    push bx
+    push dx
+
+leer_nombre_ciclo:
+    call leer_tecla
+    cmp al, 0
+    jne revisar_nombre_normal
+    cmp ah, ALT_Z
+    jne leer_nombre_ciclo
+    mov al, 0
+    jmp leer_nombre_fin
+
+revisar_nombre_normal:
+    cmp al, 0Dh
+    je confirmar_nombre
+    cmp al, ASCII_BACK
+    je borrar_nombre
+    call es_nombre_valido
+    cmp bh, 1
+    jne leer_nombre_ciclo
+    cmp largo_nombre, MAX_NOMBRE
+    jae leer_nombre_ciclo
+
+    call convertir_mayuscula
+    mov bl, largo_nombre
+    mov bh, 0
+    mov nombre_archivo[bx], al
+    mov dh, 10
+    mov dl, 39
+    add dl, largo_nombre
+    mov bl, COLOR_DEF
+    call escribir_char
+    inc largo_nombre
+    jmp leer_nombre_ciclo
+
+confirmar_nombre:
+    cmp largo_nombre, 0
+    je leer_nombre_ciclo
+    mov al, 1
+    jmp leer_nombre_fin
+
+borrar_nombre:
+    cmp largo_nombre, 0
+    je leer_nombre_ciclo
+    dec largo_nombre
+    mov bl, largo_nombre
+    mov bh, 0
+    mov nombre_archivo[bx], 0
+    mov dh, 10
+    mov dl, 39
+    add dl, largo_nombre
+    mov al, ' '
+    mov bl, COLOR_DEF
+    call escribir_char
+    jmp leer_nombre_ciclo
+
+leer_nombre_fin:
+    pop dx
+    pop bx
+    ret
+leer_nombre endp
+
+; acepta solo letras y numeros y devuelve BH en uno cuando son validos
+es_nombre_valido proc
+    mov bh, 1
+    cmp al, '0'
+    jb nombre_no_valido
+    cmp al, '9'
+    jbe nombre_valido_fin
+    cmp al, 'A'
+    jb nombre_no_valido
+    cmp al, 'Z'
+    jbe nombre_valido_fin
+    cmp al, 'a'
+    jb nombre_no_valido
+    cmp al, 'z'
+    jbe nombre_valido_fin
+
+nombre_no_valido:
+    mov bh, 0
+
+nombre_valido_fin:
+    ret
+es_nombre_valido endp
+
+; convierte a mayuscula una letra minuscula que viene en AL
+convertir_mayuscula proc
+    cmp al, 'a'
+    jb mayuscula_fin
+    cmp al, 'z'
+    ja mayuscula_fin
+    sub al, 20h
+
+mayuscula_fin:
+    ret
+convertir_mayuscula endp
+
+; arma el nombre para DOS agregando la extension y el cero final
+armar_nombre_dos proc
+    push ax
+    push bx
+    push cx
+
+    mov bx, 0
+    mov cl, largo_nombre
+    mov ch, 0
+
+copiar_nombre:
+    cmp cx, 0
+    je agregar_extension
+    mov al, nombre_archivo[bx]
+    mov nombre_dos[bx], al
+    inc bx
+    loop copiar_nombre
+
+agregar_extension:
+    mov byte ptr nombre_dos[bx], '.'
+    inc bx
+    mov byte ptr nombre_dos[bx], 'T'
+    inc bx
+    mov byte ptr nombre_dos[bx], 'X'
+    inc bx
+    mov byte ptr nombre_dos[bx], 'E'
+    inc bx
+    mov byte ptr nombre_dos[bx], 0
+
+    pop cx
+    pop bx
+    pop ax
+    ret
+armar_nombre_dos endp
+
+; crea el archivo en disco y lo cierra de inmediato
+crear_en_disco proc
+    mov cx, 0
+    lea dx, nombre_dos
+    mov ah, 3Ch
+    int 21h
+    jc crear_disco_fin
+
+    mov bx, ax
+    mov ah, 3Eh
+    int 21h
+
+crear_disco_fin:
+    ret
+crear_en_disco endp
+
+; deja vacios los buffers de texto y color para el archivo nuevo
+vaciar_buffer proc
+    push ax
+    push cx
+    push si
+
+    mov si, 0
+    mov cx, 2000
+    mov al, ' '
+    mov ah, COLOR_DEF
+
+vaciar_ciclo:
+    mov buf_texto[si], al
+    mov buf_color[si], ah
+    inc si
+    loop vaciar_ciclo
+
+    pop si
+    pop cx
+    pop ax
+    ret
+vaciar_buffer endp
+
+; muestra el error de DOS y espera una tecla antes de pedir otro nombre
+mostrar_error proc
+    push bx
+    push dx
+    push si
+
+    mov dh, 17
+    mov dl, 20
+    mov bl, COLOR_SELECCION
+    lea si, texto_error
+    call escribir_texto
+    call leer_tecla
+
+    pop si
+    pop dx
+    pop bx
+    ret
+mostrar_error endp
+
+; escribe en pantalla el nombre actual sin usar terminador de cadena
+escribir_nombre proc
+    push ax
+    push bx
+    push cx
+
+    mov bx, 0
+    mov cl, largo_nombre
+    mov ch, 0
+
+nombre_ciclo:
+    cmp cx, 0
+    je nombre_fin
+    mov al, nombre_archivo[bx]
+    call escribir_char
+    inc bx
+    inc dl
+    loop nombre_ciclo
+
+nombre_fin:
+    pop cx
+    pop bx
+    pop ax
+    ret
+escribir_nombre endp
 
 end inicio
