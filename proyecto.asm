@@ -55,6 +55,26 @@ texto_archivo   db 'Archivo: SIN NOMBRE$'
 texto_fila      db 'Fila:$'
 texto_columna   db 'Col:$'
 texto_atajo     db 'Alt+H = ayuda$'
+texto_color     db 'Color:$'
+
+colores_letra   db 0Fh, 0Ah, 0Eh       ; blanco, verde y amarillo
+colores_fondo   db 00h, 10h, 40h       ; negro, azul y rojo
+indice_letra    db 0                   ; color de letra seleccionado
+indice_fondo    db 0                   ; color de fondo seleccionado
+color_activo    db 0Fh                 ; atributo para los caracteres nuevos
+
+linea_ayuda     db '+------------------------------------------------------------------------------+$'
+titulo_ayuda    db '|                             AYUDA DEL EDITOR                              |$'
+ayuda_flechas   db 'Flechas: mueven el cursor.$'
+ayuda_borrar    db 'Backspace: borra el caracter anterior.$'
+ayuda_centrar   db 'Alt+C: centra el cursor en la linea actual.$'
+ayuda_arriba    db 'Alt+U: mueve el cursor a la primera fila.$'
+ayuda_abajo     db 'Alt+D: mueve el cursor a la ultima fila.$'
+ayuda_letra     db 'Alt+M: cambia el color de letra nuevo.$'
+ayuda_fondo     db 'Alt+N: cambia el color de fondo nuevo.$'
+ayuda_ayuda     db 'Alt+H: muestra esta pantalla de ayuda.$'
+ayuda_volver    db 'Alt+Z: regresa al menu.$'
+ayuda_salir     db 'Presione cualquier tecla para volver.$'
 
 
 .code
@@ -259,7 +279,10 @@ tecla_borrar:
 tecla_especial:
     ; Alt+Z regresa al menu principal y las flechas mueven el cursor
     cmp ah, ALT_Z
-    je fin_edicion
+    jne revisar_arriba
+    jmp fin_edicion
+
+revisar_arriba:
     cmp ah, FLECHA_ARRIBA
     je subir_fila
     cmp ah, FLECHA_ABAJO
@@ -268,6 +291,18 @@ tecla_especial:
     je mover_izquierda
     cmp ah, FLECHA_DERECHA
     je mover_derecha
+    cmp ah, ALT_C
+    je centrar_linea
+    cmp ah, ALT_U
+    je ir_arriba
+    cmp ah, ALT_D
+    je ir_abajo
+    cmp ah, ALT_M
+    je cambiar_letra
+    cmp ah, ALT_N
+    je cambiar_fondo
+    cmp ah, ALT_H
+    je mostrar_ayuda
     jmp ciclo_edicion
 
 subir_fila:
@@ -297,6 +332,40 @@ mover_derecha:
     jae fin_derecha
     inc col_cur
 fin_derecha:
+    jmp ciclo_edicion
+
+centrar_linea:
+    call centrar_cursor
+    jmp ciclo_edicion
+
+ir_arriba:
+    mov fila_cur, FILA_MIN
+    jmp ciclo_edicion
+
+ir_abajo:
+    mov fila_cur, FILA_MAX
+    jmp ciclo_edicion
+
+cambiar_letra:
+    inc indice_letra
+    cmp indice_letra, 3
+    jb letra_lista
+    mov indice_letra, 0
+letra_lista:
+    call actualizar_color
+    jmp ciclo_edicion
+
+cambiar_fondo:
+    inc indice_fondo
+    cmp indice_fondo, 3
+    jb fondo_lista
+    mov indice_fondo, 0
+fondo_lista:
+    call actualizar_color
+    jmp ciclo_edicion
+
+mostrar_ayuda:
+    call pantalla_ayuda
     jmp ciclo_edicion
 
 fin_edicion:
@@ -363,6 +432,15 @@ estado_ciclo:
     mov dl, 16
     mov al, col_cur
     call mostrar_numero
+
+    ; muestra una celda con el color que se usara al escribir
+    mov dl, 21
+    lea si, texto_color
+    call escribir_texto
+    mov dl, 28
+    mov al, 219
+    mov bl, color_activo
+    call escribir_char
 
     ; recuerda el atajo de la ayuda
     mov dl, 60
@@ -454,10 +532,11 @@ escribir_en_buffer proc
 
     ; guarda el caracter con su color y lo dibuja en la pantalla
     mov buf_texto[bx], al
-    mov buf_color[bx], COLOR_DEF
+    mov al, color_activo
+    mov buf_color[bx], al
     mov dh, fila_cur
     mov dl, col_cur
-    mov bl, COLOR_DEF
+    mov bl, color_activo
     call escribir_char
 
     pop dx
@@ -646,5 +725,142 @@ pintar_ciclo:
     pop ax
     ret
 pintar_buffer endp
+
+; combina el color de letra y fondo que estan seleccionados
+actualizar_color proc
+    push ax
+    push bx
+
+    ; el fondo ya usa la parte alta y la letra la parte baja del atributo
+    mov bl, indice_letra
+    mov bh, 0
+    mov al, colores_letra[bx]
+    mov bl, indice_fondo
+    mov bh, 0
+    add al, colores_fondo[bx]
+    mov color_activo, al
+
+    pop bx
+    pop ax
+    ret
+actualizar_color endp
+
+; busca el final del texto de la fila y mueve el cursor a su mitad
+centrar_cursor proc
+    push ax
+    push bx
+    push cx
+    push si
+    push di
+
+    ; calcula la primera posicion del buffer para la fila actual
+    mov al, fila_cur
+    mov bl, 80
+    mul bl
+    mov si, ax
+    mov cx, 80
+    mov di, 0
+    mov bx, 0FFFFh
+
+buscar_texto:
+    mov al, buf_texto[si]
+    cmp al, ' '
+    je seguir_texto
+    mov bx, di
+
+seguir_texto:
+    inc si
+    inc di
+    loop buscar_texto
+
+    ; si toda la fila tiene espacios, deja el cursor en la columna 40
+    cmp bx, 0FFFFh
+    jne texto_encontrado
+    mov col_cur, 40
+    jmp centrar_fin
+
+texto_encontrado:
+    ; la mitad se calcula desde la columna cero hasta el ultimo caracter
+    mov ax, bx
+    inc ax
+    mov cl, 2
+    div cl
+    mov col_cur, al
+
+centrar_fin:
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+centrar_cursor endp
+
+; muestra los atajos y redibuja el documento al regresar
+pantalla_ayuda proc
+    push bx
+    push dx
+    push si
+
+    ; limpia la pantalla y dibuja un marco sencillo para la ayuda
+    mov bl, COLOR_FONDO
+    call limpiar_pantalla
+    mov dh, 2
+    mov dl, 0
+    mov bl, COLOR_MARCO
+    lea si, linea_ayuda
+    call escribir_texto
+    mov dh, 3
+    lea si, titulo_ayuda
+    call escribir_texto
+    mov dh, 4
+    lea si, linea_ayuda
+    call escribir_texto
+
+    ; escribe cada atajo en una fila distinta
+    mov dh, 6
+    mov dl, 5
+    mov bl, COLOR_DEF
+    lea si, ayuda_flechas
+    call escribir_texto
+    mov dh, 7
+    lea si, ayuda_borrar
+    call escribir_texto
+    mov dh, 8
+    lea si, ayuda_centrar
+    call escribir_texto
+    mov dh, 9
+    lea si, ayuda_arriba
+    call escribir_texto
+    mov dh, 10
+    lea si, ayuda_abajo
+    call escribir_texto
+    mov dh, 11
+    lea si, ayuda_letra
+    call escribir_texto
+    mov dh, 12
+    lea si, ayuda_fondo
+    call escribir_texto
+    mov dh, 13
+    lea si, ayuda_ayuda
+    call escribir_texto
+    mov dh, 14
+    lea si, ayuda_volver
+    call escribir_texto
+    mov dh, 16
+    mov dl, 20
+    mov bl, COLOR_MARCO
+    lea si, ayuda_salir
+    call escribir_texto
+
+    ; espera una tecla y recupera el documento con sus atributos guardados
+    call leer_tecla
+    call dibujar_edicion
+
+    pop si
+    pop dx
+    pop bx
+    ret
+pantalla_ayuda endp
 
 end inicio
