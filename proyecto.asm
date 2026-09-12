@@ -88,6 +88,11 @@ texto_nombre    db 'Nombre (maximo 8): $'
 texto_extension db 'Extension: .TXE$'
 texto_crear_ayuda db 'Enter confirma. Alt+Z regresa.$'
 texto_error     db 'No se pudo crear el archivo.$'
+texto_txe       db '.TXE$'
+titulo_abrir    db '|                ABRIR ARCHIVO                 |$'
+texto_error_abrir db 'No se pudo abrir el archivo.$'
+texto_error_guardar db 'No se pudo guardar.$'
+tabla_imagenes  db 60 dup(0) ; 20 imagenes de 3 bytes: numero, fila y columna
 
 
 .code
@@ -227,14 +232,14 @@ revisar_enter:
     cmp al, 0Dh
     jne esperar_menu
 
-    ; crear pide nombre; abrir queda temporal hasta el siguiente paso
+    ; salir termina, y crear o abrir piden un nombre antes de entrar al editor
     cmp opcion_menu, 2
     je salir_menu
 
     cmp opcion_menu, 0
     je crear_nuevo
 
-    call pantalla_edicion
+    call abrir_archivo
     call dibujar_menu
     jmp esperar_menu
 
@@ -298,12 +303,18 @@ tecla_borrar:
     jmp ciclo_edicion
 
 tecla_especial:
-    ; Alt+Z regresa al menu principal y las flechas mueven el cursor
+    ; Alt+Z y Alt+S usan jne mas jmp porque sus destinos quedan lejos para un salto condicional
     cmp ah, ALT_Z
-    jne revisar_arriba
+    jne revisar_guardar
     jmp fin_edicion
 
+revisar_guardar:
+    cmp ah, ALT_S
+    jne revisar_arriba
+    jmp guardar_salir
+
 revisar_arriba:
+    ; las flechas mueven el cursor y los demas atajos llaman a su rutina
     cmp ah, FLECHA_ARRIBA
     je subir_fila
     cmp ah, FLECHA_ABAJO
@@ -389,6 +400,23 @@ mostrar_ayuda:
     call pantalla_ayuda
     jmp ciclo_edicion
 
+guardar_salir:
+    ; guarda el documento y termina el programa si no hubo error
+    call guardar_en_disco
+    jc error_guardar
+    mov ax, 4C00h
+    int 21h
+
+error_guardar:
+    ; avisa en la barra de estado y sigue en la edicion
+    mov dh, FILA_ESTADO
+    mov dl, 32
+    mov bl, COLOR_ESTADO
+    lea si, texto_error_guardar
+    call escribir_texto
+    call leer_tecla
+    jmp ciclo_edicion
+
 fin_edicion:
     ret
 pantalla_edicion endp
@@ -419,7 +447,7 @@ dibujar_edicion proc
 
 mostrar_nombre_archivo:
     call escribir_nombre
-    lea si, texto_extension
+    lea si, texto_txe
     call escribir_texto
 
 archivo_listo:
@@ -467,12 +495,12 @@ estado_ciclo:
     mov al, col_cur
     call mostrar_numero
 
-    ; muestra una celda con el color que se usara al escribir
+    ; muestra una letra de ejemplo con el color de letra y fondo que se usara al escribir
     mov dl, 21
     lea si, texto_color
     call escribir_texto
     mov dl, 28
-    mov al, 219
+    mov al, 'A'
     mov bl, color_activo
     call escribir_char
 
@@ -1152,30 +1180,191 @@ mostrar_error proc
     ret
 mostrar_error endp
 
-; escribe en pantalla el nombre actual sin usar terminador de cadena
+; escribe el nombre actual con el color BL desde la columna DL y deja DL al final del nombre
 escribir_nombre proc
     push ax
-    push bx
     push cx
+    push si
 
-    mov bx, 0
+    mov si, 0
     mov cl, largo_nombre
     mov ch, 0
 
 nombre_ciclo:
     cmp cx, 0
     je nombre_fin
-    mov al, nombre_archivo[bx]
+    mov al, nombre_archivo[si]
     call escribir_char
-    inc bx
+    inc si
     inc dl
     loop nombre_ciclo
 
 nombre_fin:
+    pop si
+    pop cx
+    pop ax
+    ret
+escribir_nombre endp
+
+; Formato del archivo .TXE, 4060 bytes en total:
+;   bytes    0 a 1999: buffer de caracteres, uno por cada celda de la pantalla
+;   bytes 2000 a 3999: buffer de atributos de color, uno por cada celda
+;   bytes 4000 a 4059: tabla de imagenes, 20 registros de 3 bytes (numero, fila y columna)
+; abre el archivo en modo escritura, escribe las tres partes y lo cierra; CF en 1 si hubo error
+guardar_en_disco proc
+    push ax
+    push bx
+    push cx
+    push dx
+
+    ; abre el archivo que ya existe en modo escritura
+    mov ah, 3Dh
+    mov al, 1
+    lea dx, nombre_dos
+    int 21h
+    jc guardar_disco_fin
+    mov bx, ax
+
+    ; escribe los caracteres, los colores y la tabla de imagenes en ese orden
+    mov ah, 40h
+    mov cx, 2000
+    lea dx, buf_texto
+    int 21h
+    mov ah, 40h
+    mov cx, 2000
+    lea dx, buf_color
+    int 21h
+    mov ah, 40h
+    mov cx, 60
+    lea dx, tabla_imagenes
+    int 21h
+
+    ; cierra el archivo para que DOS termine de escribirlo
+    mov ah, 3Eh
+    int 21h
+
+guardar_disco_fin:
+    pop dx
     pop cx
     pop bx
     pop ax
     ret
-escribir_nombre endp
+guardar_en_disco endp
+
+; pide un nombre, abre el archivo y entra al editor con su contenido
+abrir_archivo proc
+pedir_abrir:
+    ; pide el nombre y regresa al menu si el usuario presiona Alt+Z
+    mov largo_nombre, 0
+    call dibujar_abrir
+    call leer_nombre
+    cmp al, 0
+    je abrir_fin
+
+    ; arma el nombre para DOS, lee el archivo y entra al editor
+    call armar_nombre_dos
+    call leer_de_disco
+    jc error_abrir
+    call pantalla_edicion
+
+abrir_fin:
+    ret
+
+error_abrir:
+    ; avisa que no se pudo abrir y vuelve a pedir otro nombre
+    mov dh, 17
+    mov dl, 20
+    mov bl, COLOR_SELECCION
+    lea si, texto_error_abrir
+    call escribir_texto
+    call leer_tecla
+    jmp pedir_abrir
+abrir_archivo endp
+
+; dibuja la pantalla donde se pide el nombre del archivo que se va a abrir
+dibujar_abrir proc
+    push bx
+    push dx
+    push si
+
+    ; limpia la pantalla y dibuja el marco con el titulo
+    mov bl, COLOR_FONDO
+    call limpiar_pantalla
+    mov dh, 5
+    mov dl, 16
+    mov bl, COLOR_MARCO
+    lea si, linea_crear
+    call escribir_texto
+    mov dh, 6
+    lea si, titulo_abrir
+    call escribir_texto
+    mov dh, 7
+    lea si, linea_crear
+    call escribir_texto
+
+    ; escribe el mensaje, la extension y las teclas que se pueden usar
+    mov dh, 10
+    mov dl, 20
+    mov bl, COLOR_DEF
+    lea si, texto_nombre
+    call escribir_texto
+    mov dh, 12
+    lea si, texto_extension
+    call escribir_texto
+    mov dh, 15
+    mov dl, 20
+    mov bl, COLOR_MARCO
+    lea si, texto_crear_ayuda
+    call escribir_texto
+
+    pop si
+    pop dx
+    pop bx
+    ret
+dibujar_abrir endp
+
+; abre el archivo en modo lectura y copia su contenido a los buffers; CF en 1 si no se pudo abrir
+leer_de_disco proc
+    push ax
+    push bx
+    push cx
+    push dx
+
+    ; abre el archivo existente en modo lectura
+    mov ah, 3Dh
+    mov al, 0
+    lea dx, nombre_dos
+    int 21h
+    jc leer_disco_fin
+    mov bx, ax
+
+    ; vacia los buffers por si el archivo se creo pero nunca se guardo
+    call vaciar_buffer
+
+    ; lee los caracteres, los colores y la tabla de imagenes en el mismo orden en que se guardaron
+    mov ah, 3Fh
+    mov cx, 2000
+    lea dx, buf_texto
+    int 21h
+    mov ah, 3Fh
+    mov cx, 2000
+    lea dx, buf_color
+    int 21h
+    mov ah, 3Fh
+    mov cx, 60
+    lea dx, tabla_imagenes
+    int 21h
+
+    ; cierra el archivo
+    mov ah, 3Eh
+    int 21h
+
+leer_disco_fin:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+leer_de_disco endp
 
 end inicio
