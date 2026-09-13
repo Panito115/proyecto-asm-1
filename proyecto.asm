@@ -37,6 +37,7 @@ COL_MAX         equ 79
 COLOR_ESTADO    equ 70h             ; barra de estado: fondo gris, letras negras
 ASCII_BACK      equ 08h             ; codigo ASCII de la tecla Backspace
 MAX_NOMBRE      equ 8               ; cantidad maxima de letras para un archivo
+MAX_IMAGENES    equ 20              ; cantidad maxima de imagenes en la tabla
 
 .data
 
@@ -93,6 +94,16 @@ titulo_abrir    db '|                ABRIR ARCHIVO                 |$'
 texto_error_abrir db 'No se pudo abrir el archivo.$'
 texto_error_guardar db 'No se pudo guardar.$'
 tabla_imagenes  db 60 dup(0) ; 20 imagenes de 3 bytes: numero, fila y columna
+imagen_carita   db 00h, 0Eh, 0Eh, 0Eh, 00h ; imagen 1 de 5x5: amarillo 0Eh y negro 00h
+                db 0Eh, 00h, 0Eh, 00h, 0Eh
+                db 0Eh, 0Eh, 0Eh, 0Eh, 0Eh
+                db 0Eh, 00h, 00h, 00h, 0Eh
+                db 00h, 0Eh, 0Eh, 0Eh, 00h
+imagen_corazon  db 00h, 0Ch, 00h, 0Ch, 00h ; imagen 2 de 5x5: rojo 0Ch y negro 00h
+                db 0Ch, 0Ch, 0Ch, 0Ch, 0Ch
+                db 0Ch, 0Ch, 0Ch, 0Ch, 0Ch
+                db 00h, 0Ch, 0Ch, 0Ch, 00h
+                db 00h, 00h, 0Ch, 00h, 00h
 
 
 .code
@@ -274,7 +285,8 @@ pantalla_edicion proc
     call dibujar_edicion
 
 ciclo_edicion:
-    ; refresca la barra de estado, coloca el cursor y espera una tecla
+    ; repinta las imagenes encima del texto, refresca la barra de estado y espera una tecla
+    call pintar_imagenes
     call dibujar_estado
     mov dh, fila_cur
     mov dl, col_cur
@@ -303,15 +315,25 @@ tecla_borrar:
     jmp ciclo_edicion
 
 tecla_especial:
-    ; Alt+Z y Alt+S usan jne mas jmp porque sus destinos quedan lejos para un salto condicional
+    ; Alt+Z, Alt+S, Alt+I y Alt+J usan jne con jmp porque sus destinos quedan lejos para un salto condicional
     cmp ah, ALT_Z
     jne revisar_guardar
     jmp fin_edicion
 
 revisar_guardar:
     cmp ah, ALT_S
-    jne revisar_arriba
+    jne revisar_imagen1
     jmp guardar_salir
+
+revisar_imagen1:
+    cmp ah, ALT_I
+    jne revisar_imagen2
+    jmp poner_imagen1
+
+revisar_imagen2:
+    cmp ah, ALT_J
+    jne revisar_arriba
+    jmp poner_imagen2
 
 revisar_arriba:
     ; las flechas mueven el cursor y los demas atajos llaman a su rutina
@@ -417,6 +439,18 @@ error_guardar:
     call leer_tecla
     jmp ciclo_edicion
 
+poner_imagen1:
+    ; anota la carita en la tabla; el ciclo la dibuja al volver
+    mov al, 1
+    call insertar_imagen
+    jmp ciclo_edicion
+
+poner_imagen2:
+    ; anota el corazon en la tabla; el ciclo lo dibuja al volver
+    mov al, 2
+    call insertar_imagen
+    jmp ciclo_edicion
+
 fin_edicion:
     ret
 pantalla_edicion endp
@@ -427,10 +461,11 @@ dibujar_edicion proc
     push dx
     push si
 
-    ; limpia la pantalla y pinta el contenido del documento
+    ; limpia la pantalla y pinta el documento con las imagenes encima
     mov bl, COLOR_FONDO
     call limpiar_pantalla
     call pintar_buffer
+    call pintar_imagenes
 
     ; escribe el nombre del archivo en la fila reservada de arriba
     mov dh, FILA_ARCHIVO
@@ -1138,7 +1173,7 @@ crear_disco_fin:
     ret
 crear_en_disco endp
 
-; deja vacios los buffers de texto y color para el archivo nuevo
+; deja vacios los buffers de texto y color y la tabla de imagenes para el archivo nuevo
 vaciar_buffer proc
     push ax
     push cx
@@ -1154,6 +1189,15 @@ vaciar_ciclo:
     mov buf_color[si], ah
     inc si
     loop vaciar_ciclo
+
+    ; borra tambien las imagenes colocadas, los 60 bytes de la tabla
+    mov si, 0
+    mov cx, 60
+
+vaciar_tabla:
+    mov tabla_imagenes[si], 0
+    inc si
+    loop vaciar_tabla
 
     pop si
     pop cx
@@ -1366,5 +1410,119 @@ leer_disco_fin:
     pop ax
     ret
 leer_de_disco endp
+
+; anota la imagen AL en la posicion del cursor si cabe en pantalla y queda lugar en la tabla
+insertar_imagen proc
+    push bx
+    push cx
+    push si
+
+    ; ignora el atajo si la imagen de 5x5 se sale por la derecha o por abajo
+    cmp fila_cur, FILA_MAX - 4
+    ja insertar_fin
+    cmp col_cur, COL_MAX - 4
+    ja insertar_fin
+
+    ; busca el primer registro libre, que es el que tiene numero de imagen 0
+    mov si, 0
+    mov cx, MAX_IMAGENES
+
+buscar_libre:
+    cmp tabla_imagenes[si], 0
+    je anotar_imagen
+    add si, 3
+    loop buscar_libre
+    jmp insertar_fin
+
+anotar_imagen:
+    ; guarda numero de imagen, fila y columna en los 3 bytes del registro
+    mov tabla_imagenes[si], al
+    mov bl, fila_cur
+    mov tabla_imagenes[si+1], bl
+    mov bl, col_cur
+    mov tabla_imagenes[si+2], bl
+
+insertar_fin:
+    pop si
+    pop cx
+    pop bx
+    ret
+insertar_imagen endp
+
+; recorre la tabla de imagenes y dibuja cada imagen colocada encima de lo que haya en pantalla
+pintar_imagenes proc
+    push ax
+    push cx
+    push dx
+    push si
+
+    mov si, 0
+    mov cx, MAX_IMAGENES
+
+pintar_img_ciclo:
+    ; los registros con numero 0 estan libres y se saltan
+    mov al, tabla_imagenes[si]
+    cmp al, 0
+    je siguiente_img
+    mov dh, tabla_imagenes[si+1]
+    mov dl, tabla_imagenes[si+2]
+    call dibujar_imagen
+
+siguiente_img:
+    add si, 3
+    loop pintar_img_ciclo
+
+    pop si
+    pop dx
+    pop cx
+    pop ax
+    ret
+pintar_imagenes endp
+
+; dibuja la imagen AL de 5x5 con bloques de color desde la fila DH y la columna DL
+dibujar_imagen proc
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+
+    ; elige la tabla de colores de la imagen pedida
+    lea si, imagen_carita
+    cmp al, 1
+    je imagen_elegida
+    lea si, imagen_corazon
+
+imagen_elegida:
+    ; CH cuenta las 5 filas y CL las 5 columnas de cada fila
+    mov ch, 5
+
+img_fila:
+    push dx
+    mov cl, 5
+
+img_columna:
+    ; dibuja un bloque 219 con el color de la celda y pasa a la siguiente
+    mov al, 219
+    mov bl, [si]
+    call escribir_char
+    inc si
+    inc dl
+    dec cl
+    jnz img_columna
+
+    ; regresa a la columna inicial y baja una fila
+    pop dx
+    inc dh
+    dec ch
+    jnz img_fila
+
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+dibujar_imagen endp
 
 end inicio
