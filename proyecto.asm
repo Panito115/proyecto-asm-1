@@ -144,6 +144,7 @@ inicio:
     call menu_principal
 
     ; salida limpia a DOS
+    call salir_dos
     mov ax, 4C00h
     int 21h
 
@@ -334,6 +335,7 @@ ciclo_edicion:
 
 tecla_normal:
     mov mostrar_resultado, 0
+    call revisar_palabra_larga
     call escribir_en_buffer
     call avanzar_cursor
     jmp ciclo_edicion
@@ -460,6 +462,7 @@ guardar_salir:
     ; guarda el documento y termina el programa si no hubo error
     call guardar_en_disco
     jc error_guardar
+    call salir_dos
     mov ax, 4C00h
     int 21h
 
@@ -706,6 +709,118 @@ avanzar_fin:
     ret
 avanzar_cursor endp
 
+; mueve la palabra completa abajo si comenzo al final de la fila anterior
+revisar_palabra_larga proc
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+
+    ; solo revisa al escribir al inicio de una nueva fila con una letra o numero
+    cmp al, ' '
+    jne revisar_columna_palabra
+    jmp palabra_larga_fin
+
+revisar_columna_palabra:
+    cmp col_cur, COL_MIN
+    je revisar_fila_palabra
+    jmp palabra_larga_fin
+
+revisar_fila_palabra:
+    cmp fila_cur, FILA_MIN
+    ja revisar_fila_vacia
+    jmp palabra_larga_fin
+
+    ; no mueve nada si ya existe texto en la nueva fila
+revisar_fila_vacia:
+    mov al, fila_cur
+    mov bl, 80
+    mul bl
+    mov di, ax
+    cmp buf_texto[di], ' '
+    je buscar_palabra_anterior
+    jmp palabra_larga_fin
+
+    ; busca donde empieza la palabra que quedo al final de la fila anterior
+buscar_palabra_anterior:
+    mov al, fila_cur
+    dec al
+    mov bl, 80
+    mul bl
+    mov bx, ax
+    add ax, COL_MAX
+    mov si, ax
+    cmp buf_texto[si], ' '
+    jne contar_palabra
+    jmp palabra_larga_fin
+
+contar_palabra:
+    mov cx, 1
+
+buscar_inicio_palabra:
+    cmp si, bx
+    je inicio_palabra_listo
+    dec si
+    cmp buf_texto[si], ' '
+    je separar_palabra
+    inc cx
+    jmp buscar_inicio_palabra
+
+separar_palabra:
+    inc si
+
+inicio_palabra_listo:
+    ; una palabra de 80 caracteres no cabe completa en la fila siguiente
+    cmp cx, 80
+    jb revisar_espacio_destino
+    jmp palabra_larga_fin
+
+    ; evita borrar texto que ya existia en el destino
+revisar_espacio_destino:
+    mov bx, di
+    mov dx, cx
+
+revisar_destino:
+    cmp buf_texto[bx], ' '
+    je avanzar_destino
+    jmp palabra_larga_fin
+
+avanzar_destino:
+    inc bx
+    dec dx
+    jnz revisar_destino
+
+    ; copia caracteres y atributos a la nueva fila, y limpia el lugar anterior
+    mov dx, cx
+
+mover_palabra:
+    mov al, buf_texto[si]
+    mov ah, buf_color[si]
+    mov buf_texto[di], al
+    mov buf_color[di], ah
+    mov byte ptr buf_texto[si], ' '
+    mov byte ptr buf_color[si], COLOR_DEF
+    inc si
+    inc di
+    dec dx
+    jnz mover_palabra
+
+    ; deja el cursor despues de la palabra para escribir el caracter nuevo
+    mov col_cur, cl
+    call dibujar_edicion
+
+palabra_larga_fin:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+revisar_palabra_larga endp
+
 ; borra el caracter que esta antes del cursor y deja el cursor en ese lugar
 borrar_char proc
     push ax
@@ -773,6 +888,22 @@ poner_cursor proc
     pop ax
     ret
 poner_cursor endp
+
+; limpia la pantalla y coloca el cursor antes de volver a DOS
+salir_dos proc
+    push bx
+    push dx
+
+    mov bl, COLOR_DEF
+    call limpiar_pantalla
+    mov dh, 0
+    mov dl, 0
+    call poner_cursor
+
+    pop dx
+    pop bx
+    ret
+salir_dos endp
 
 ; escribe el caracter de AL con el color de BL en la fila DH y la columna DL
 escribir_char proc
