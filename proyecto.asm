@@ -38,6 +38,7 @@ COLOR_ESTADO    equ 70h             ; barra de estado: fondo gris, letras negras
 ASCII_BACK      equ 08h             ; codigo ASCII de la tecla Backspace
 MAX_NOMBRE      equ 8               ; cantidad maxima de letras para un archivo
 MAX_IMAGENES    equ 20              ; cantidad maxima de imagenes en la tabla
+MAX_PALABRA     equ 10              ; cantidad maxima de letras para buscar
 
 .data
 
@@ -75,9 +76,34 @@ ayuda_arriba    db 'Alt+U: mueve el cursor a la primera fila.$'
 ayuda_abajo     db 'Alt+D: mueve el cursor a la ultima fila.$'
 ayuda_letra     db 'Alt+M: cambia el color de letra nuevo.$'
 ayuda_fondo     db 'Alt+N: cambia el color de fondo nuevo.$'
+ayuda_guardar   db 'Alt+S: guarda el archivo y sale.$'
+ayuda_imagen1   db 'Alt+I: inserta la carita.$'
+ayuda_imagen2   db 'Alt+J: inserta el corazon.$'
+ayuda_buscar    db 'Alt+B: busca y reemplaza palabras.$'
 ayuda_ayuda     db 'Alt+H: muestra esta pantalla de ayuda.$'
 ayuda_volver    db 'Alt+Z: regresa al menu.$'
 ayuda_salir     db 'Presione cualquier tecla para volver.$'
+
+palabra_entrada db 10 dup(0)        ; palabra que se esta escribiendo abajo
+palabra_buscar  db 10 dup(0)        ; palabra que se va a encontrar
+palabra_cambiar db 10 dup(0)        ; palabra que la reemplaza
+largo_entrada   db 0                ; largo de la palabra temporal
+largo_buscar    db 0                ; largo de las dos palabras
+col_entrada     db 0                ; columna donde inicia la palabra temporal
+limite_busqueda dw 0                ; ultima posicion donde cabe una palabra
+reemplazos      dw 0                ; cantidad de palabras reemplazadas
+mostrar_resultado db 0              ; indica si se muestra el total en estado
+
+texto_buscar    db 'Buscar: $'
+texto_cambiar   db 'Cambiar por: $'
+texto_largo     db 'Las palabras deben tener el mismo largo.$'
+texto_reemplazos db 'Reemplazos:$'
+
+linea_bienvenida db '+------------------------------------------------------------------------------+$'
+titulo_bienvenida db '|                         PAN: EDITOR DE TEXTO x8086                         |$'
+texto_clase      db 'Arquitectura y Diseno de Computadoras - UFM$'
+texto_integrantes db 'Victor Saravia y Juan Pablo (Pan) Madriz$'
+texto_continuar  db 'Presione cualquier tecla para continuar.$'
 
 nombre_archivo  db 8 dup(0) ; nombre sin extension para mostrar
 nombre_dos      db 13 dup(0) ; nombre con .TXE y cero final
@@ -114,6 +140,7 @@ inicio:
     mov ds, ax
 
     ; muestra el menu hasta que el usuario seleccione salir
+    call pantalla_bienvenida
     call menu_principal
 
     ; salida limpia a DOS
@@ -306,11 +333,13 @@ ciclo_edicion:
     jmp ciclo_edicion
 
 tecla_normal:
+    mov mostrar_resultado, 0
     call escribir_en_buffer
     call avanzar_cursor
     jmp ciclo_edicion
 
 tecla_borrar:
+    mov mostrar_resultado, 0
     call borrar_char
     jmp ciclo_edicion
 
@@ -332,8 +361,13 @@ revisar_imagen1:
 
 revisar_imagen2:
     cmp ah, ALT_J
-    jne revisar_arriba
+    jne revisar_buscar
     jmp poner_imagen2
+
+revisar_buscar:
+    cmp ah, ALT_B
+    jne revisar_arriba
+    jmp buscar_reemplazar
 
 revisar_arriba:
     ; las flechas mueven el cursor y los demas atajos llaman a su rutina
@@ -544,6 +578,16 @@ estado_ciclo:
     lea si, texto_atajo
     call escribir_texto
 
+    ; mantiene visible el resultado del ultimo buscar y reemplazar
+    cmp mostrar_resultado, 0
+    je estado_fin
+    mov dl, 32
+    lea si, texto_reemplazos
+    call escribir_texto
+    mov dl, 45
+    call mostrar_reemplazos
+
+estado_fin:
     pop si
     pop dx
     pop cx
@@ -939,12 +983,24 @@ pantalla_ayuda proc
     lea si, ayuda_fondo
     call escribir_texto
     mov dh, 13
-    lea si, ayuda_ayuda
+    lea si, ayuda_guardar
     call escribir_texto
     mov dh, 14
-    lea si, ayuda_volver
+    lea si, ayuda_imagen1
+    call escribir_texto
+    mov dh, 15
+    lea si, ayuda_imagen2
     call escribir_texto
     mov dh, 16
+    lea si, ayuda_buscar
+    call escribir_texto
+    mov dh, 17
+    lea si, ayuda_ayuda
+    call escribir_texto
+    mov dh, 18
+    lea si, ayuda_volver
+    call escribir_texto
+    mov dh, 21
     mov dl, 20
     mov bl, COLOR_MARCO
     lea si, ayuda_salir
@@ -959,6 +1015,371 @@ pantalla_ayuda proc
     pop bx
     ret
 pantalla_ayuda endp
+
+; pide dos palabras del mismo largo y reemplaza la primera por la segunda
+buscar_reemplazar proc
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+
+pedir_buscar:
+    mov largo_entrada, 0
+    call limpiar_barra
+    mov dh, FILA_ESTADO
+    mov dl, 1
+    mov bl, COLOR_ESTADO
+    lea si, texto_buscar
+    call escribir_texto
+    mov col_entrada, 9
+    call leer_palabra
+    cmp al, 0
+    je buscar_cancelar
+    call guardar_busqueda
+
+    mov largo_entrada, 0
+    call limpiar_barra
+    mov dh, FILA_ESTADO
+    mov dl, 1
+    mov bl, COLOR_ESTADO
+    lea si, texto_cambiar
+    call escribir_texto
+    mov col_entrada, 14
+    call leer_palabra
+    cmp al, 0
+    je buscar_cancelar
+    mov al, largo_entrada
+    cmp al, largo_buscar
+    jne largo_distinto
+    call guardar_cambio
+    call reemplazar_palabras
+    mov mostrar_resultado, 1
+    call dibujar_edicion
+    jmp buscar_fin
+
+largo_distinto:
+    call limpiar_barra
+    mov dh, FILA_ESTADO
+    mov dl, 18
+    mov bl, COLOR_ESTADO
+    lea si, texto_largo
+    call escribir_texto
+    call leer_tecla
+    jmp pedir_buscar
+
+buscar_cancelar:
+    mov mostrar_resultado, 0
+    call dibujar_edicion
+
+buscar_fin:
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+buscar_reemplazar endp
+
+; limpia la fila de estado para usarla como entrada temporal
+limpiar_barra proc
+    push ax
+    push bx
+    push cx
+    push dx
+
+    mov cx, 80
+    mov dh, FILA_ESTADO
+    mov dl, 0
+    mov al, ' '
+    mov bl, COLOR_ESTADO
+
+limpiar_barra_ciclo:
+    call escribir_char
+    inc dl
+    loop limpiar_barra_ciclo
+
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+limpiar_barra endp
+
+; lee una palabra alfanumerica de hasta diez caracteres en la barra de estado
+leer_palabra proc
+    push bx
+    push dx
+
+leer_palabra_ciclo:
+    call leer_tecla
+    cmp al, 0
+    jne revisar_palabra_normal
+    cmp ah, ALT_Z
+    jne leer_palabra_ciclo
+    mov al, 0
+    jmp leer_palabra_fin
+
+revisar_palabra_normal:
+    cmp al, 0Dh
+    je confirmar_palabra
+    cmp al, ASCII_BACK
+    je borrar_palabra
+    call es_nombre_valido
+    cmp bh, 1
+    jne leer_palabra_ciclo
+    cmp largo_entrada, MAX_PALABRA
+    jae leer_palabra_ciclo
+
+    mov bl, largo_entrada
+    mov bh, 0
+    mov palabra_entrada[bx], al
+    mov dh, FILA_ESTADO
+    mov dl, col_entrada
+    add dl, largo_entrada
+    mov bl, COLOR_ESTADO
+    call escribir_char
+    inc largo_entrada
+    jmp leer_palabra_ciclo
+
+confirmar_palabra:
+    cmp largo_entrada, 0
+    je leer_palabra_ciclo
+    mov al, 1
+    jmp leer_palabra_fin
+
+borrar_palabra:
+    cmp largo_entrada, 0
+    je leer_palabra_ciclo
+    dec largo_entrada
+    mov bl, largo_entrada
+    mov bh, 0
+    mov palabra_entrada[bx], 0
+    mov dh, FILA_ESTADO
+    mov dl, col_entrada
+    add dl, largo_entrada
+    mov al, ' '
+    mov bl, COLOR_ESTADO
+    call escribir_char
+    jmp leer_palabra_ciclo
+
+leer_palabra_fin:
+    pop dx
+    pop bx
+    ret
+leer_palabra endp
+
+; copia la palabra temporal al buffer de busqueda
+guardar_busqueda proc
+    push ax
+    push cx
+    push si
+
+    mov al, largo_entrada
+    mov largo_buscar, al
+    mov si, 0
+    mov cl, largo_entrada
+    mov ch, 0
+
+copiar_busqueda:
+    cmp cx, 0
+    je busqueda_lista
+    mov al, palabra_entrada[si]
+    mov palabra_buscar[si], al
+    inc si
+    loop copiar_busqueda
+
+busqueda_lista:
+    pop si
+    pop cx
+    pop ax
+    ret
+guardar_busqueda endp
+
+; copia la palabra temporal al buffer de reemplazo
+guardar_cambio proc
+    push ax
+    push cx
+    push si
+
+    mov si, 0
+    mov cl, largo_entrada
+    mov ch, 0
+
+copiar_cambio:
+    cmp cx, 0
+    je cambio_listo
+    mov al, palabra_entrada[si]
+    mov palabra_cambiar[si], al
+    inc si
+    loop copiar_cambio
+
+cambio_listo:
+    pop si
+    pop cx
+    pop ax
+    ret
+guardar_cambio endp
+
+; recorre el buffer y reemplaza sin tocar los atributos de color
+reemplazar_palabras proc
+    push ax
+    push bx
+    push cx
+    push di
+    push si
+
+    mov reemplazos, 0
+    mov ax, 2000
+    mov cl, largo_buscar
+    mov ch, 0
+    sub ax, cx
+    mov limite_busqueda, ax
+    mov bx, 0
+
+revisar_posicion:
+    cmp bx, limite_busqueda
+    ja reemplazo_fin
+    mov si, 0
+
+comparar_palabra:
+    cmp si, cx
+    jae palabra_encontrada
+    mov al, palabra_buscar[si]
+    mov di, bx
+    add di, si
+    cmp al, buf_texto[di]
+    jne siguiente_posicion
+    inc si
+    jmp comparar_palabra
+
+palabra_encontrada:
+    mov si, 0
+
+cambiar_palabra:
+    cmp si, cx
+    jae contar_reemplazo
+    mov al, palabra_cambiar[si]
+    mov di, bx
+    add di, si
+    mov buf_texto[di], al
+    inc si
+    jmp cambiar_palabra
+
+contar_reemplazo:
+    inc reemplazos
+    add bx, cx
+    jmp revisar_posicion
+
+siguiente_posicion:
+    inc bx
+    jmp revisar_posicion
+
+reemplazo_fin:
+    pop si
+    pop di
+    pop cx
+    pop bx
+    pop ax
+    ret
+reemplazar_palabras endp
+
+; muestra el total de reemplazos en cuatro digitos
+mostrar_reemplazos proc
+    push ax
+    push bx
+    push dx
+    push si
+    push bp
+
+    mov bp, dx
+    mov ax, reemplazos
+    mov bx, 1000
+    xor dx, dx
+    div bx
+    mov si, dx
+    mov dx, bp
+    add al, '0'
+    call escribir_char
+    inc dl
+    mov bp, dx
+
+    mov ax, si
+    mov bx, 100
+    xor dx, dx
+    div bx
+    mov si, dx
+    mov dx, bp
+    add al, '0'
+    call escribir_char
+    inc dl
+    mov bp, dx
+
+    mov ax, si
+    mov bx, 10
+    xor dx, dx
+    div bx
+    mov si, dx
+    mov dx, bp
+    add al, '0'
+    call escribir_char
+    inc dl
+    mov bp, dx
+
+    mov dx, bp
+    mov ax, si
+    add al, '0'
+    call escribir_char
+
+    pop bp
+    pop si
+    pop dx
+    pop bx
+    pop ax
+    ret
+mostrar_reemplazos endp
+
+; muestra la presentacion inicial antes de llegar al menu
+pantalla_bienvenida proc
+    push bx
+    push dx
+    push si
+
+    mov bl, COLOR_FONDO
+    call limpiar_pantalla
+    mov dh, 4
+    mov dl, 0
+    mov bl, COLOR_MARCO
+    lea si, linea_bienvenida
+    call escribir_texto
+    mov dh, 5
+    lea si, titulo_bienvenida
+    call escribir_texto
+    mov dh, 6
+    lea si, linea_bienvenida
+    call escribir_texto
+
+    mov dh, 10
+    mov dl, 18
+    mov bl, COLOR_DEF
+    lea si, texto_clase
+    call escribir_texto
+    mov dh, 12
+    mov dl, 18
+    lea si, texto_integrantes
+    call escribir_texto
+    mov dh, 17
+    mov dl, 20
+    mov bl, COLOR_MARCO
+    lea si, texto_continuar
+    call escribir_texto
+    call leer_tecla
+
+    pop si
+    pop dx
+    pop bx
+    ret
+pantalla_bienvenida endp
 
 ; pide un nombre, crea el archivo y entra al editor vacio
 crear_archivo proc
