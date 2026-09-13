@@ -636,6 +636,12 @@ es_valido proc
     je valido_fin
     cmp al, ':'
     je valido_fin
+    cmp al, ';'
+    je valido_fin
+    cmp al, '?'
+    je valido_fin
+    cmp al, '!'
+    je valido_fin
 
     ; los numeros y las letras se revisan por rangos
     cmp al, '0'
@@ -674,13 +680,13 @@ escribir_en_buffer proc
     add bx, ax
     pop ax
 
-    ; guarda el caracter con su color y lo dibuja en la pantalla
+    ; guarda el caracter y conserva BX como indice para su color
     mov buf_texto[bx], al
-    mov bl, color_activo
-    mov buf_color[bx], bl
+    mov ah, color_activo
+    mov buf_color[bx], ah
     mov dh, fila_cur
     mov dl, col_cur
-    mov bl, color_activo
+    mov bl, ah
     call escribir_char
 
     pop dx
@@ -1812,6 +1818,7 @@ guardar_en_disco proc
     push bx
     push cx
     push dx
+    push si
 
     ; abre el archivo que ya existe en modo escritura
     mov ah, 3Dh
@@ -1826,20 +1833,38 @@ guardar_en_disco proc
     mov cx, 2000
     lea dx, buf_texto
     int 21h
+    jc cerrar_con_error
+    cmp ax, 2000
+    jne cerrar_con_error
     mov ah, 40h
     mov cx, 2000
     lea dx, buf_color
     int 21h
+    jc cerrar_con_error
+    cmp ax, 2000
+    jne cerrar_con_error
     mov ah, 40h
     mov cx, 60
     lea dx, tabla_imagenes
     int 21h
+    jc cerrar_con_error
+    cmp ax, 60
+    jne cerrar_con_error
 
     ; cierra el archivo para que DOS termine de escribirlo
     mov ah, 3Eh
     int 21h
+    jc guardar_disco_fin
+    clc
+    jmp guardar_disco_fin
+
+cerrar_con_error:
+    mov ah, 3Eh
+    int 21h
+    stc
 
 guardar_disco_fin:
+    pop si
     pop dx
     pop cx
     pop bx
@@ -1925,6 +1950,7 @@ leer_de_disco proc
     push bx
     push cx
     push dx
+    push si
 
     ; abre el archivo existente en modo lectura
     mov ah, 3Dh
@@ -1942,20 +1968,45 @@ leer_de_disco proc
     mov cx, 2000
     lea dx, buf_texto
     int 21h
+    jc cerrar_lectura_error
+    cmp ax, 0
+    je cerrar_lectura
+    cmp ax, 2000
+    jne cerrar_lectura_error
     mov ah, 3Fh
     mov cx, 2000
     lea dx, buf_color
     int 21h
+    jc cerrar_lectura_error
+    cmp ax, 0
+    je cerrar_lectura
+    cmp ax, 2000
+    jne cerrar_lectura_error
     mov ah, 3Fh
     mov cx, 60
     lea dx, tabla_imagenes
     int 21h
+    jc cerrar_lectura_error
+    cmp ax, 0
+    je cerrar_lectura
+    cmp ax, 60
+    jne cerrar_lectura_error
 
     ; cierra el archivo
+cerrar_lectura:
     mov ah, 3Eh
     int 21h
+    jc leer_disco_fin
+    clc
+    jmp leer_disco_fin
+
+cerrar_lectura_error:
+    mov ah, 3Eh
+    int 21h
+    stc
 
 leer_disco_fin:
+    pop si
     pop dx
     pop cx
     pop bx
