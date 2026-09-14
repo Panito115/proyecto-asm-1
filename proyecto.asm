@@ -1,3 +1,4 @@
+TITLE 'Editor de texto x8086 - Victor Saravia y Juan Pablo (Pan) Madriz'
 .model small
 .stack 100h
 
